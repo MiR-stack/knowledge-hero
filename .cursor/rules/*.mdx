@@ -1,0 +1,52 @@
+---
+description: Locked stack and non-negotiable constraints — Scoped-RAG KB platform
+globs: ["**/*"]
+alwaysApply: true
+---
+
+# Source of truth
+`docs/srs.md` is the spec. If an instruction here or in a prompt conflicts with it,
+docs/srs.md wins — flag the conflict instead of silently picking one.
+
+# Locked stack — do not substitute without asking
+- Monorepo: Turborepo + pnpm workspaces
+- Backend API: Fastify 4 (TypeScript)
+- Frontend: Next.js 14, App Router
+- ORM: Drizzle, schema mirrors docs/srs.md §4.1 exactly (table/column names, enums, indexes)
+- DB: PostgreSQL 16 + pgvector extension
+- Queue: BullMQ + ioredis
+- Auth: jose (JWT) + argon2 (password hashing)
+- Object storage: S3-compatible (MinIO locally, S3 in prod)
+
+# Non-negotiable security invariants
+- Tenant isolation MUST use `SET LOCAL app.current_workspace` inside an explicit
+  transaction (BEGIN...COMMIT) per every request — never a session-level SET.
+  This is a merge-blocking rule; see docs/srs.md §6.2. Any DB access helper that
+  doesn't go through the transaction-scoped context is a bug, not a shortcut.
+- Web URL ingestion MUST block RFC 1918 / link-local / loopback targets at the
+  network layer before fetching (docs/srs.md FR-2.4). Do not implement this as an
+  application-level string check on the URL alone — that's bypassable via
+  redirects and DNS rebinding; block at the egress/fetch layer.
+- Folder and Scope authorization checks happen in the query itself (join/filter),
+  never as a post-fetch filter on an unrestricted result set.
+- Every resource-consuming call (OCR dequeue, embedding call, LLM generation)
+  checks the workspace's rate limit BEFORE the external call is made, not after.
+
+# Repo boundaries
+- apps/web — Next.js UI only, no direct DB access, calls apps/api
+- apps/api — Fastify REST + SSE/WS, owns all DB writes
+- apps/worker — BullMQ consumers (OCR, chunking, embedding, scope resolution)
+- packages/db — Drizzle schema + migrations, shared by api and worker
+- packages/shared-types — types shared across apps (request/response DTOs)
+
+# Testing conventions
+- Every new Fastify route ships with at least one integration test.
+- Any change touching tenant isolation, folder permissions, or Scope resolution
+  ships with a test that asserts a *negative* case (workspace A cannot see
+  workspace B's data), not just the happy path.
+- Chunking/OCR acceptance criteria in docs/srs.md (FR-2.2, FR-3.1) are numeric —
+  test against those numbers, not "looks reasonable."
+
+# When you hit a gap
+If the SRS doesn't specify something you need to build, stop and ask rather than
+inventing a convention — especially for schema shape, auth, or rate-limit numbers.

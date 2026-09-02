@@ -1,0 +1,42 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "globalPassThroughEnv": [
+    "API_PORT",
+    "API_HOST",
+    "WEB_PORT",
+    "WEB_URL",
+    "NEXT_PUBLIC_API_URL",
+    "DATABASE_URL",
+    "REDIS_URL",
+    "S3_ENDPOINT",
+    "S3_ACCESS_KEY",
+    "S3_SECRET_KEY",
+    "S3_BUCKET",
+    "S3_REGION",
+    "S3_FORCE_PATH_STYLE",
+    "LLM_PROVIDER",
+    "LLM_API_KEY",
+    "EMBEDDING_PROVIDER",
+    "EMBEDDING_API_KEY"
+  ],
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": [".next/**", "!.next/cache/**", "dist/**"]
+    },
+    "dev": {
+      "dependsOn": ["^build"],
+      "cache": false,
+      "persistent": true
+    },
+    "test": {
+      "dependsOn": ["^build"]
+    },
+    "db:migrate": {
+      "cache": false
+    },
+    "lint": {
+      "dependsOn": ["^build"]
+    }
+  }
+}
