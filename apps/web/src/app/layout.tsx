@@ -1,8 +1,9 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { AuthProvider } from "../lib/auth";
 
 export const metadata: Metadata = {
-  title: "RAG Platform",
+  title: "Drive",
   description: "Drive-style knowledge base with scoped RAG",
 };
 
@@ -13,8 +14,8 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className="min-h-screen bg-gray-50 text-gray-900 antialiased">
-        {children}
+      <body className="min-h-screen bg-white text-drive-text antialiased">
+        <AuthProvider>{children}</AuthProvider>
       </body>
     </html>
   );

@@ -1,20 +1,6 @@
-import type { HealthResponse } from "@rag/shared-types";
+import Link from "next/link";
 
-async function getApiHealth(): Promise<HealthResponse | null> {
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
-
-  try {
-    const res = await fetch(`${apiUrl}/health`, { cache: "no-store" });
-    if (!res.ok) return null;
-    return res.json();
-  } catch {
-    return null;
-  }
-}
-
-export default async function HomePage() {
-  const health = await getApiHealth();
-
+export default function HomePage() {
   return (
     <main className="mx-auto flex min-h-screen max-w-3xl flex-col items-center justify-center gap-6 p-8">
       <div className="text-center">
@@ -24,20 +10,19 @@ export default async function HomePage() {
         </p>
       </div>
 
-      <div className="w-full rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
-        <h2 className="text-sm font-medium uppercase tracking-wide text-gray-500">
-          API Status
-        </h2>
-        {health ? (
-          <p className="mt-2 text-lg">
-            <span className="inline-block h-2 w-2 rounded-full bg-green-500 mr-2" />
-            {health.service} — {health.status}
-          </p>
-        ) : (
-          <p className="mt-2 text-lg text-amber-600">
-            API unreachable (start apps/api)
-          </p>
-        )}
+      <div className="flex gap-4">
+        <Link
+          href="/drive"
+          className="rounded-md bg-blue-600 px-6 py-3 text-sm font-medium text-white hover:bg-blue-700"
+        >
+          Open Drive
+        </Link>
+        <Link
+          href="/login"
+          className="rounded-md border border-gray-300 px-6 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50"
+        >
+          Sign in
+        </Link>
       </div>
     </main>
   );

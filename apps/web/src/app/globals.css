@@ -1,3 +1,89 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  :root {
+    --drive-blue: #1a73e8;
+    --drive-blue-hover: #1967d2;
+    --drive-blue-light: #e8f0fe;
+    --drive-bg: #f8f9fa;
+    --drive-sidebar: #f0f4f9;
+    --drive-border: #dadce0;
+    --drive-text: #202124;
+    --drive-text-secondary: #5f6368;
+    --drive-hover: #e8eaed;
+    --drive-selected: #c2e7ff;
+    --drive-selected-border: #1a73e8;
+  }
+
+  body {
+    font-family: "Google Sans", "Roboto", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+}
+
+@layer components {
+  .drive-btn {
+    @apply inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium transition-colors;
+  }
+
+  .drive-btn-primary {
+    @apply drive-btn bg-drive-blue text-white hover:bg-drive-blue-hover shadow-sm;
+  }
+
+  .drive-btn-secondary {
+    @apply drive-btn border border-drive-border bg-white text-drive-text hover:bg-drive-hover;
+  }
+
+  .drive-icon-btn {
+    @apply flex h-9 w-9 items-center justify-center rounded-full text-drive-text-secondary transition-colors hover:bg-drive-hover;
+  }
+
+  .drive-sidebar-item {
+    @apply flex w-full items-center gap-3 rounded-full px-4 py-2 text-sm font-medium text-drive-text transition-colors hover:bg-drive-hover;
+  }
+
+  .drive-sidebar-item-active {
+    @apply bg-drive-blue-light text-drive-blue;
+  }
+
+  .drive-search {
+    @apply w-full rounded-full border border-transparent bg-drive-hover px-4 py-2.5 pl-11 text-sm text-drive-text placeholder:text-drive-text-secondary focus:border-drive-blue focus:bg-white focus:outline-none focus:ring-1 focus:ring-drive-blue;
+  }
+
+  .drive-card {
+    @apply relative flex cursor-pointer flex-col rounded-xl border border-transparent bg-white p-3 transition-all hover:bg-drive-hover;
+  }
+
+  .drive-card-selected {
+    @apply border-drive-selected-border bg-drive-blue-light;
+  }
+
+  .drive-list-row {
+    @apply flex cursor-pointer items-center gap-3 border-b border-drive-border px-4 py-2 transition-colors hover:bg-drive-hover;
+  }
+
+  .drive-list-row-selected {
+    @apply bg-drive-blue-light;
+  }
+
+  .drive-dropdown {
+    @apply absolute z-50 min-w-[200px] rounded-lg border border-drive-border bg-white py-1 shadow-lg;
+  }
+
+  .drive-dropdown-item {
+    @apply flex w-full items-center gap-3 px-4 py-2.5 text-sm text-drive-text transition-colors hover:bg-drive-hover;
+  }
+
+  .drive-context-menu {
+    @apply fixed z-[100] min-w-[180px] rounded-lg border border-drive-border bg-white py-1 shadow-xl;
+  }
+
+  .drive-context-item {
+    @apply flex w-full items-center gap-3 px-4 py-2 text-sm text-drive-text transition-colors hover:bg-drive-hover disabled:cursor-not-allowed disabled:opacity-40;
+  }
+
+  .drive-context-item-danger {
+    @apply text-red-600 hover:bg-red-50;
+  }
+}
