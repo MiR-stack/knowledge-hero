@@ -31,6 +31,7 @@ const STATUS_LABELS = {
 } as const;
 
 interface FileListProps {
+  liveStatuses?: Map<string, { status: string; progressPct: number }>;
   folders: FolderSummary[];
   documents: DocumentSummary[];
   selection: DriveSelection[];
@@ -43,6 +44,7 @@ interface FileListProps {
 }
 
 export function FileList({
+  liveStatuses,
   folders,
   documents,
   selection,
@@ -136,6 +138,10 @@ export function FileList({
         const item = documentToSelection(doc);
         const selected = isItemSelected(item, selection);
 
+        const liveStatus = liveStatuses?.get(doc.id);
+        const currentStatus = (liveStatus?.status ?? doc.processingStatus) as keyof typeof STATUS_LABELS;
+        const currentProgress = liveStatus?.progressPct ?? 0;
+
         return (
           <div
             key={doc.id}
@@ -158,12 +164,24 @@ export function FileList({
                 isBaseDocument={doc.isBaseDocument}
                 size={20}
               />
-              <div className="min-w-0">
+              <div className="min-w-0 flex items-center gap-2">
                 <span className="truncate text-sm text-drive-text">{doc.title}</span>
-                {doc.processingStatus !== "indexed" && (
-                  <span className="ml-2 text-xs text-drive-text-secondary">
-                    {STATUS_LABELS[doc.processingStatus]}
+                {currentStatus !== "indexed" && (
+                  <span className={`text-xs ${
+                    currentStatus === "extracting" || currentStatus === "chunking" || currentStatus === "embedding"
+                      ? "text-blue-600 animate-pulse"
+                      : currentStatus === "failed" ? "text-red-600" : "text-drive-text-secondary"
+                  }`}>
+                    {STATUS_LABELS[currentStatus]}
                   </span>
+                )}
+                {(currentStatus === "extracting" || currentStatus === "chunking" || currentStatus === "embedding") && (
+                  <div className="w-16 rounded-full bg-gray-200 h-1 mt-0.5">
+                    <div
+                      className="h-1 rounded-full bg-blue-500 transition-all duration-500"
+                      style={{ width: `${currentProgress}%` }}
+                    />
+                  </div>
                 )}
               </div>
             </div>

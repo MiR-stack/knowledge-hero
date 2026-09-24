@@ -12,6 +12,7 @@ import type {
 import { useAuth } from "../../lib/auth";
 import {
   createFolder,
+  copyDocument,
   deleteDocument,
   deleteFolder,
   fetchFolderContents,
@@ -43,9 +44,11 @@ import {
 import { useDriveKeyboard } from "../../lib/useDriveKeyboard";
 import { Breadcrumbs } from "./Breadcrumbs";
 import { ContextMenu, SelectionBar } from "./ContextMenu";
+import { DocumentPreviewModal } from "./DocumentPreviewModal";
 import { DriveSidebar } from "./DriveSidebar";
 import { DriveTopBar } from "./DriveTopBar";
 import { FileGrid } from "./FileGrid";
+import { WorkspaceStatusProvider } from "./WorkspaceStatusProvider";
 import { FileList, FileListHeader } from "./FileList";
 import { ShareModal, type ShareTarget } from "./ShareModal";
 import { ToastProvider, useToast } from "./Toast";
@@ -67,6 +70,9 @@ function DriveViewInner() {
   const [currentFolderAccess, setCurrentFolderAccess] = useState<AccessLevel>("write");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  
+  // Map from documentId → live status from SSE/WS
+  const [liveStatuses, setLiveStatuses] = useState<Map<string, { status: string; progressPct: number }>>(new Map());
 
   const [viewMode, setViewMode] = useState<ViewMode>("grid");
   const [sortField, setSortField] = useState<SortField>("name");
@@ -87,6 +93,8 @@ function DriveViewInner() {
     item: DriveSelection;
   } | null>(null);
   const [dragOverMain, setDragOverMain] = useState(false);
+  const [previewDocument, setPreviewDocument] = useState<DocumentSummary | null>(null);
+
 
   const loadDrive = useCallback(
     async (folderId?: string, keepSelection = false) => {
@@ -221,7 +229,8 @@ function DriveViewInner() {
   ) {
     if (!currentFolderId || !auth.token) return;
     for (const file of files) {
-      await uploadDocument(auth.token, auth.workspaceId, currentFolderId, file, options);
+      const result = await uploadDocument(auth.token, auth.workspaceId, currentFolderId, file, options);
+      setLiveStatuses(prev => new Map(prev).set(result.documentId, { status: 'queued', progressPct: 0 }));
     }
     showToast(`${files.length} file${files.length > 1 ? "s" : ""} uploaded`, "success");
     await loadDrive(currentFolderId);
@@ -318,6 +327,32 @@ function DriveViewInner() {
     await loadDrive(currentFolderId);
   }
 
+  async function handleCopyToCurrentFolder(item: DriveSelection) {
+    if (!auth.token || !currentFolderId || item.kind !== "document") return;
+    if (currentFolderAccess !== "write") {
+      showToast("You do not have permission to copy into this folder", "error");
+      return;
+    }
+    try {
+      await copyDocument(auth.token, auth.workspaceId, item.id, currentFolderId);
+      showToast(`Copy of "${item.name}" is processing`, "success");
+      await loadDrive(currentFolderId);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Copy failed", "error");
+    }
+  }
+
+  function handlePreviewDocument(item: DriveSelection) {
+    if (item.kind !== "document") return;
+    // Find the full DocumentSummary from the current view
+    const doc =
+      contents?.documents.find((d) => d.id === item.id) ??
+      searchResults.find((d) => d.id === item.id) ??
+      null;
+    if (doc) setPreviewDocument(doc);
+  }
+
+
   function openShare(item: DriveSelection) {
     const folderId =
       item.kind === "folder" ? item.id : item.parentId ?? currentFolderId;
@@ -380,12 +415,20 @@ function DriveViewInner() {
         : (contents?.folder?.name ?? "My Drive");
 
   return (
-    <div className="flex h-screen flex-col bg-white">
-      <DriveTopBar
-        searchQuery={searchQuery}
-        onSearchChange={setSearchQuery}
+    <WorkspaceStatusProvider workspaceId={auth.workspaceId ?? null} token={auth.token ?? null}>
+      <div className="flex h-screen flex-col bg-white">
+        <DriveTopBar
+          searchQuery={searchQuery}
+          onSearchChange={setSearchQuery}
         onSearchSubmit={() => void runSearch(searchQuery)}
       />
+
+      {previewDocument && (
+        <DocumentPreviewModal
+          document={previewDocument}
+          onClose={() => setPreviewDocument(null)}
+        />
+      )}
 
       {shareTarget && (
         <ShareModal
@@ -613,6 +656,7 @@ function DriveViewInner() {
                 </div>
               ) : (
                 <FileGrid
+                  liveStatuses={liveStatuses}
                   folders={[]}
                   documents={searchResults}
                   selection={selection}
@@ -620,10 +664,12 @@ function DriveViewInner() {
                   onOpenFolder={(id) => void navigateTo(id)}
                   onMoveItem={(item, targetId) => void handleMove(item, targetId)}
                   onContextMenu={handleContextMenu}
+                  onPreview={handlePreviewDocument}
                 />
               )
             ) : viewMode === "list" ? (
               <FileList
+                liveStatuses={liveStatuses}
                 folders={sortedFolders}
                 documents={sortedDocuments}
                 selection={selection}
@@ -636,6 +682,7 @@ function DriveViewInner() {
               />
             ) : (
               <FileGrid
+                liveStatuses={liveStatuses}
                 folders={sortedFolders}
                 documents={sortedDocuments}
                 selection={selection}
@@ -643,12 +690,14 @@ function DriveViewInner() {
                 onOpenFolder={(id) => void navigateTo(id)}
                 onMoveItem={(item, targetId) => void handleMove(item, targetId)}
                 onContextMenu={handleContextMenu}
+                onPreview={handlePreviewDocument}
               />
             )}
           </div>
         </main>
       </div>
     </div>
+    </WorkspaceStatusProvider>
   );
 }
 

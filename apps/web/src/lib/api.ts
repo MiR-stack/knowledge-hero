@@ -331,3 +331,82 @@ export async function restoreFolder(
     workspaceId,
   });
 }
+
+export function openDocumentEventStream(
+  documentId: string,
+  token: string,
+  workspaceId: string,
+  onEvent: (event: { status: string; progressPct: number; error: string | null }) => void,
+  onClose?: () => void
+): () => void {
+  let closed = false;
+  
+  async function connect() {
+    try {
+      const res = await fetch(`${API_URL}/api/v1/documents/${documentId}/events`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'X-Workspace-Id': workspaceId,
+          Accept: 'text/event-stream',
+        },
+      });
+      if (!res.ok || !res.body) { onClose?.(); return; }
+      
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      
+      while (!closed) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const events = buffer.split('\n\n');
+        buffer = events.pop() ?? '';
+        for (const event of events) {
+          if (!event.trim()) continue;
+          const lines = event.split('\n');
+          let dataStr = '';
+          for (const line of lines) {
+            if (line.startsWith('data:')) dataStr = line.slice(5).trim();
+          }
+          if (!dataStr) continue;
+          try {
+            const data = JSON.parse(dataStr);
+            onEvent({ status: data.status, progressPct: data.progressPct ?? 0, error: data.error ?? null });
+            if (data.status === 'indexed' || data.status === 'failed') {
+              closed = true; reader.cancel(); onClose?.(); return;
+            }
+          } catch {}
+        }
+      }
+    } catch { onClose?.(); }
+  }
+  
+  connect();
+  return () => { closed = true; };
+}
+
+/** FR-1.5 — Copy a document into a target folder */
+export async function copyDocument(
+  token: string,
+  workspaceId: string,
+  documentId: string,
+  targetFolderId: string,
+): Promise<{ documentId: string; copiedFromId: string; status: string; createdAt: string }> {
+  return request(`/api/v1/documents/${documentId}/copy`, {
+    method: "POST",
+    token,
+    workspaceId,
+    body: JSON.stringify({ targetFolderId }),
+  });
+}
+
+/**
+ * FR-1.4 — Build the URL for inline document preview.
+ * Returns an authenticated URL suitable for use in an <iframe> or <img>.
+ * The preview endpoint streams the raw file with the correct Content-Type.
+ */
+export function getPreviewUrl(documentId: string): string {
+  const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
+  return `${API_URL}/api/v1/documents/${documentId}/preview`;
+}

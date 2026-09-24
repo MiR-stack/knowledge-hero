@@ -1,5 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createDb } from "@rag/db";
+import { sql } from "drizzle-orm";
+import { createDb, documents } from "@rag/db";
+import { eq } from "drizzle-orm";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -117,5 +119,73 @@ describe("tenant isolation through PgBouncer transaction pooling", () => {
 
     expect(crossTenant.statusCode).toBe(404);
     expect(crossTenant.json()).toMatchObject({ error: "not_found" });
+  });
+
+  /**
+   * MUTATION TEST — Phase 1 acceptance criterion
+   *
+   * Proves the cross-tenant isolation test above is NOT a false positive:
+   * when we use the correct workspace context (session-level SET matching
+   * the document's workspace), the row IS visible — confirming that:
+   *
+   *  1. The document row genuinely exists in the DB
+   *  2. RLS visibility gates on `app.current_workspace`
+   *  3. Therefore, any mismatched-workspace test that gets 404 is genuinely
+   *     testing the SET LOCAL security invariant, not a vacuous test
+   *
+   * In other words: if someone reverted `SET LOCAL` to a bare `SET` in the
+   * tenant plugin, a pooled connection could inherit a prior request's
+   * workspace ID, and the cross-tenant test would flip from 404 to 200 —
+   * exactly what the test is designed to catch.
+   */
+  it("MUTATION: same-workspace SET confirms row exists — proves cross-tenant 404 is RLS-enforced not vacuous", async () => {
+    // Open a dedicated admin connection (direct Postgres, no PgBouncer, no RLS)
+    const rawDb = createDb(directUrl, { prepare: false, max: 1 });
+
+    try {
+      // Set workspace context to workspace B (the owner of the target document)
+      // at the session level — this is the "broken" pattern that the plugin avoids.
+      // On a raw non-pooled connection we do this explicitly to confirm visibility.
+      await rawDb.execute(
+        sql`SELECT set_config('app.current_workspace', ${workspaceB.workspaceId}::text, false)`,
+      );
+
+      // Direct query: should find the row because context matches ownership
+      const rows = await rawDb
+        .select({ id: documents.id })
+        .from(documents)
+        .where(eq(documents.id, workspaceB.documentId))
+        .limit(1);
+
+      // Row MUST be visible — it exists, and workspace context matches
+      expect(rows).toHaveLength(1);
+      expect(rows[0].id).toBe(workspaceB.documentId);
+
+      // Now set WRONG workspace (workspace A) at session level — simulating the
+      // pooled-connection bug where a prior request left the wrong context.
+      await rawDb.execute(
+        sql`SELECT set_config('app.current_workspace', ${workspaceA.workspaceId}::text, false)`,
+      );
+
+      // With session-level SET (not LOCAL), there's no transaction boundary
+      // rolling back the context — the wrong workspace ID persists.
+      // RLS should now DENY visibility of workspace B's document.
+      const rowsAfterBadSet = await rawDb
+        .select({ id: documents.id })
+        .from(documents)
+        .where(eq(documents.id, workspaceB.documentId))
+        .limit(1);
+
+      // Row must NOT be visible — proves RLS is the enforcement, not the query filter
+      expect(rowsAfterBadSet).toHaveLength(0);
+
+      // This confirms: the 404 in the cross-tenant HTTP test is because RLS
+      // hides the row when workspace context doesn't match, not because we
+      // wrote a query that filters by workspace_id in the WHERE clause.
+      // If someone removed the RLS policy, this test would fail here —
+      // catching the regression before it reaches production.
+    } finally {
+      await rawDb.$client.end();
+    }
   });
 });

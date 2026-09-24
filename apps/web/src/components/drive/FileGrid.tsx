@@ -30,6 +30,7 @@ const STATUS_COLORS = {
 } as const;
 
 interface FileGridProps {
+  liveStatuses?: Map<string, { status: string; progressPct: number }>;
   folders: FolderSummary[];
   documents: DocumentSummary[];
   selection: DriveSelection[];
@@ -37,9 +38,12 @@ interface FileGridProps {
   onOpenFolder: (folderId: string) => void;
   onMoveItem: (item: DriveSelection, targetFolderId: string) => void;
   onContextMenu: (e: React.MouseEvent, item: DriveSelection) => void;
+  /** Called when a document card is double-clicked — open preview modal */
+  onPreview?: (item: DriveSelection) => void;
 }
 
 export function FileGrid({
+  liveStatuses,
   folders,
   documents,
   selection,
@@ -47,6 +51,7 @@ export function FileGrid({
   onOpenFolder,
   onMoveItem,
   onContextMenu,
+  onPreview,
 }: FileGridProps) {
   function handleDropOnFolder(targetFolderId: string) {
     return (e: React.DragEvent) => {
@@ -117,6 +122,10 @@ export function FileGrid({
         const item = documentToSelection(doc);
         const selected = isItemSelected(item, selection);
 
+        const liveStatus = liveStatuses?.get(doc.id);
+        const currentStatus = (liveStatus?.status ?? doc.processingStatus) as keyof typeof STATUS_LABELS;
+        const currentProgress = liveStatus?.progressPct ?? 0;
+
         return (
           <div
             key={doc.id}
@@ -125,6 +134,10 @@ export function FileGrid({
             onClick={(e) => {
               e.stopPropagation();
               onSelect([item], e.ctrlKey || e.metaKey || e.shiftKey);
+            }}
+            onDoubleClick={(e) => {
+              e.stopPropagation();
+              onPreview?.(item);
             }}
             onContextMenu={(e) => {
               e.preventDefault();
@@ -145,14 +158,26 @@ export function FileGrid({
               <span className="mt-0.5 text-xs text-drive-text-secondary">
                 {formatBytes(doc.fileSizeBytes)}
               </span>
-              {doc.processingStatus !== "indexed" && (
+              {currentStatus !== "indexed" && (
                 <span
                   className={`mt-1.5 inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium ${
-                    STATUS_COLORS[doc.processingStatus]
+                    STATUS_COLORS[currentStatus]
+                  } ${
+                    currentStatus === "extracting" || currentStatus === "chunking" || currentStatus === "embedding"
+                      ? "animate-pulse"
+                      : ""
                   }`}
                 >
-                  {STATUS_LABELS[doc.processingStatus]}
+                  {STATUS_LABELS[currentStatus]}
                 </span>
+              )}
+              {(currentStatus === "extracting" || currentStatus === "chunking" || currentStatus === "embedding") && (
+                <div className="mt-1 w-full rounded-full bg-gray-200 h-1">
+                  <div
+                    className="h-1 rounded-full bg-blue-500 transition-all duration-500"
+                    style={{ width: `${currentProgress}%` }}
+                  />
+                </div>
               )}
               {doc.isBaseDocument && (
                 <span className="mt-1 text-[10px] font-medium text-purple-600">Base Document</span>

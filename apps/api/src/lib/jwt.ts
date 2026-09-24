@@ -36,3 +36,5 @@ export async function verifyAccessToken(token: string): Promise<AccessTokenPaylo
 
   return { sub: payload.sub, email };
 }
+
+export { verifyAccessToken as verifyToken };

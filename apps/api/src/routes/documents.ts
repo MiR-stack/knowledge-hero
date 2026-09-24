@@ -17,9 +17,27 @@ import {
 } from "../lib/documents.js";
 import {
   buildStorageKey,
+  copyObject,
+  downloadObjectStream,
   inferSourceType,
   uploadObject,
 } from "../lib/storage.js";
+import { onDocumentAddedToFolder, onDocumentRemovedFromFolder } from "../lib/scope-resolver.js";
+import { Queue } from 'bullmq';
+import { Redis } from 'ioredis';
+import { config } from '../config.js';
+
+let redisConn: Redis | null = null;
+function getRedis(): Redis {
+  if (!redisConn) {
+    redisConn = new Redis(config.redisUrl, { maxRetriesPerRequest: null });
+  }
+  return redisConn;
+}
+
+function getIngestionQueue(workspaceId: string): Queue {
+  return new Queue(`ingestion:${workspaceId}`, { connection: getRedis() });
+}
 
 interface UpdateDocumentBody {
   title?: string;
@@ -153,6 +171,29 @@ export async function documentRoutes(fastify: FastifyInstance) {
           uploadedBy: userId,
         })
         .returning();
+
+      // Enqueue ingestion job AFTER transaction commits (race prevention)
+      setImmediate(async () => {
+        try {
+          const queue = getIngestionQueue(request.workspaceId!);
+          await queue.add('process', {
+            documentId: document.id,
+            workspaceId: request.workspaceId!,
+            sourceType: document.sourceType,
+            storageUri: document.storageUri,
+          }, {
+            attempts: 3,
+            backoff: { type: 'exponential', delay: 2000 },
+            removeOnComplete: { count: 100 },
+            removeOnFail: false,
+          });
+        } catch (err) {
+          console.error('[documents] Failed to enqueue ingestion job:', err);
+        }
+      });
+
+      // Trigger incremental scope resolution for the document's folder
+      await onDocumentAddedToFolder(document.id, folderId ?? null, request.workspaceId!, fastify.adminDb);
 
       return reply.code(202).send({
         documentId: document.id,
@@ -376,6 +417,10 @@ export async function documentRoutes(fastify: FastifyInstance) {
         .where(eq(documents.id, existing.id))
         .returning();
 
+      // Remove from old folder-based scope memberships, add for new folder
+      await onDocumentRemovedFromFolder(moved.id, request.workspaceId!, fastify.adminDb);
+      await onDocumentAddedToFolder(moved.id, targetFolderId, request.workspaceId!, fastify.adminDb);
+
       return reply.send({
         document: {
           id: moved.id,
@@ -565,6 +610,8 @@ export async function documentRoutes(fastify: FastifyInstance) {
         .set({ deletedAt: new Date(), purgeAt, updatedAt: new Date() })
         .where(eq(documents.id, existing.id));
 
+      await onDocumentRemovedFromFolder(existing.id, request.workspaceId!, fastify.adminDb);
+
       return reply.code(204).send();
     },
   );
@@ -678,6 +725,179 @@ export async function documentRoutes(fastify: FastifyInstance) {
       ].sort((a, b) => new Date(b.deletedAt).getTime() - new Date(a.deletedAt).getTime());
 
       return reply.send({ items });
+    },
+  );
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // FR-1.5 — Copy a document (new document_id, new chunk set, unambiguous citation lineage)
+  // ─────────────────────────────────────────────────────────────────────────────
+  fastify.post<{ Params: { documentId: string }; Body: { targetFolderId: string } }>(
+    "/api/v1/documents/:documentId/copy",
+    { config: { tenant: true } },
+    async (request, reply) => {
+      const db = request.tx!;
+      const userId = request.userId!;
+      const role = request.workspaceRole!;
+      const { documentId } = request.params;
+      const { targetFolderId } = request.body ?? {};
+
+      if (!targetFolderId) {
+        return reply.code(400).send({
+          error: "validation_error",
+          message: "targetFolderId is required",
+        });
+      }
+
+      const [existing] = await db
+        .select()
+        .from(documents)
+        .where(and(eq(documents.id, documentId), isNull(documents.deletedAt)))
+        .limit(1);
+
+      if (!existing) {
+        return reply.code(404).send({ error: "not_found", message: "Document not found" });
+      }
+
+      // Published base documents are immutable — cannot be copied (would create confusion
+      // around which is the canonical version); supersede workflow is the right path.
+      if (existing.publishedAt && existing.isBaseDocument) {
+        return reply.code(403).send({
+          error: "forbidden",
+          message: "Published base documents cannot be copied. Use the supersede workflow instead.",
+        });
+      }
+
+      const [targetFolder] = await db
+        .select()
+        .from(folders)
+        .where(and(eq(folders.id, targetFolderId), isNull(folders.deletedAt)))
+        .limit(1);
+
+      if (!targetFolder) {
+        return reply.code(404).send({ error: "not_found", message: "Target folder not found" });
+      }
+
+      const { FolderAccessError: FolderErr, assertFolderWriteAccess: assertWrite } =
+        await import("../lib/folders.js");
+      try {
+        await assertWrite(db, targetFolder.path, userId, role);
+      } catch (err) {
+        if (err instanceof FolderErr) {
+          return reply.code(403).send({ error: "forbidden", message: err.message });
+        }
+        throw err;
+      }
+
+      // New identity for the copy
+      const newDocumentId = crypto.randomUUID();
+      const newStorageKey = buildStorageKey(
+        request.workspaceId!,
+        newDocumentId,
+        existing.originalFilename,
+      );
+
+      // Server-side S3 copy — no re-download (FR-1.5: new document_id, new chunk set)
+      await copyObject(existing.storageUri, newStorageKey);
+
+      const [created] = await db
+        .insert(documents)
+        .values({
+          id: newDocumentId,
+          workspaceId: request.workspaceId!,
+          folderId: targetFolderId,
+          isBaseDocument: false, // copies are never base documents
+          title: `${existing.title} (copy)`,
+          sourceType: existing.sourceType,
+          originalFilename: existing.originalFilename,
+          storageUri: newStorageKey,
+          fileSizeBytes: existing.fileSizeBytes,
+          mimeType: existing.mimeType,
+          checksumSha256: existing.checksumSha256,
+          tags: existing.tags,
+          processingStatus: "queued",
+          uploadedBy: userId,
+        })
+        .returning();
+
+      // Enqueue a fresh ingestion job so the copy gets its own independent chunk set
+      setImmediate(async () => {
+        try {
+          const queue = getIngestionQueue(request.workspaceId!);
+          await queue.add(
+            "process",
+            {
+              documentId: created.id,
+              workspaceId: request.workspaceId!,
+              sourceType: created.sourceType,
+              storageUri: created.storageUri,
+            },
+            {
+              attempts: 3,
+              backoff: { type: "exponential", delay: 2000 },
+              removeOnComplete: { count: 100 },
+              removeOnFail: false,
+            },
+          );
+        } catch (err) {
+          console.error("[documents/copy] Failed to enqueue ingestion job:", err);
+        }
+      });
+
+      // Trigger incremental scope resolution for the new document's folder
+      await onDocumentAddedToFolder(created.id, targetFolderId, request.workspaceId!, fastify.adminDb);
+
+      return reply.code(202).send({
+        documentId: created.id,
+        copiedFromId: existing.id,
+        status: created.processingStatus,
+        createdAt: created.createdAt.toISOString(),
+      });
+    },
+  );
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // FR-1.4 — Inline preview: stream raw file bytes with correct Content-Type
+  // The web client renders this URL in an <iframe> (PDF), <img> (image),
+  // or fetches it for further processing (DOCX, spreadsheet).
+  // ─────────────────────────────────────────────────────────────────────────────
+  fastify.get<{ Params: { documentId: string } }>(
+    "/api/v1/documents/:documentId/preview",
+    { config: { tenant: true } },
+    async (request, reply) => {
+      const db = request.tx!;
+      const userId = request.userId!;
+      const role = request.workspaceRole!;
+
+      const { authorizedFoldersCte: authFoldersCte } = await import("../lib/folder-permissions.js");
+
+      const rows = await db.execute<{ storage_uri: string; mime_type: string | null; original_filename: string }>(sql`
+        WITH ${authFoldersCte(userId, role)}
+        SELECT d.storage_uri, d.mime_type, d.original_filename
+        FROM documents d
+        LEFT JOIN folders f ON f.id = d.folder_id
+        LEFT JOIN authorized_folders af ON af.id = f.id
+        WHERE d.id = ${request.params.documentId}::uuid
+          AND d.deleted_at IS NULL
+          AND d.processing_status = 'indexed'
+          AND (d.folder_id IS NULL OR af.id IS NOT NULL)
+        LIMIT 1
+      `);
+
+      const row = rows[0];
+      if (!row) {
+        return reply.code(404).send({ error: "not_found", message: "Document not found or not yet indexed" });
+      }
+
+      const { stream, contentLength, contentType } = await downloadObjectStream(row.storage_uri);
+
+      // Serve inline (not as an attachment) so the browser can render it
+      const mimeType = contentType ?? row.mime_type ?? "application/octet-stream";
+      void reply.header("Content-Type", mimeType);
+      void reply.header("Content-Disposition", `inline; filename="${encodeURIComponent(row.original_filename)}"`);
+      void reply.header("Cache-Control", "private, max-age=300");
+      if (contentLength) void reply.header("Content-Length", String(contentLength));
+
+      return reply.send(stream);
     },
   );
 }

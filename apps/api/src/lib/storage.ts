@@ -1,10 +1,13 @@
 import {
+  CopyObjectCommand,
   CreateBucketCommand,
   DeleteObjectCommand,
+  GetObjectCommand,
   HeadBucketCommand,
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
+import type { Readable } from "node:stream";
 import { createHash } from "node:crypto";
 import { config } from "../config.js";
 
@@ -104,4 +107,41 @@ export function inferSourceType(
   }
 
   return "pdf_native";
+}
+
+/**
+ * Download an object from S3 as a Node.js Readable stream.
+ * Used by the preview endpoint to pipe raw file bytes to the browser.
+ */
+export async function downloadObjectStream(
+  storageUri: string,
+): Promise<{ stream: Readable; contentLength?: number; contentType?: string }> {
+  const s3 = getClient();
+  const res = await s3.send(
+    new GetObjectCommand({ Bucket: config.s3.bucket, Key: storageUri }),
+  );
+  return {
+    stream: res.Body as Readable,
+    contentLength: res.ContentLength,
+    contentType: res.ContentType,
+  };
+}
+
+/**
+ * Server-side S3 copy — used by the document copy endpoint (FR-1.5).
+ * Does not download/re-upload; copies within the bucket atomically.
+ */
+export async function copyObject(
+  sourceKey: string,
+  destKey: string,
+): Promise<void> {
+  await ensureBucket();
+  const s3 = getClient();
+  await s3.send(
+    new CopyObjectCommand({
+      Bucket: config.s3.bucket,
+      CopySource: `${config.s3.bucket}/${sourceKey}`,
+      Key: destKey,
+    }),
+  );
 }

@@ -13,4 +13,13 @@ export const config = {
     trashRetentionDays: Number(process.env.TRASH_RETENTION_DAYS ?? 30),
   },
   purgeIntervalMs: Number(process.env.PURGE_INTERVAL_MS ?? 60 * 60 * 1000),
+  ocrConcurrency: Number(process.env.OCR_CONCURRENCY ?? 2),
+  maxPagesPerOcrJob: Number(process.env.MAX_PAGES_PER_OCR_JOB ?? 50),
+  tesseractLang: process.env.TESSERACT_LANG ?? 'eng',
+  playwrightTimeoutMs: 15000,
+  webUrlMaxBytes: 10 * 1024 * 1024,
+  rateLimitWindowMs: Number(process.env.RATE_LIMIT_WINDOW_MS ?? 60_000),
+  openAiApiKey: process.env.OPENAI_API_KEY ?? '',
+  embeddingModel: process.env.EMBEDDING_MODEL ?? 'text-embedding-3-small',
+  embeddingBatchSize: Number(process.env.EMBEDDING_BATCH_SIZE ?? 100),
 } as const;

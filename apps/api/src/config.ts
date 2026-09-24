@@ -4,6 +4,7 @@ export const config = {
   webUrl: process.env.WEB_URL ?? "http://localhost:3010",
   databaseUrl: process.env.DATABASE_URL ?? "postgresql://rag:rag@localhost:5434/rag",
   pgbouncerUrl: process.env.PGBOUNCER_URL ?? "postgresql://rag_app:rag_app@localhost:6432/rag",
+  redisUrl: process.env.REDIS_URL ?? "redis://localhost:6379",
   jwtSecret: process.env.JWT_SECRET ?? "dev-secret-change-in-production",
   jwtIssuer: process.env.JWT_ISSUER ?? "rag-platform",
   jwtAudience: process.env.JWT_AUDIENCE ?? "rag-api",
